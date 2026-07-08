@@ -436,9 +436,13 @@ function resize() {
 
 // --- settings panel --------------------------------------------------------
 function fillPanel() {
-  $("set-name").value = LOCATION.name;
-  $("set-lat").value = LOCATION.lat;
-  $("set-lon").value = LOCATION.lon;
+  // Don't overwrite a text field the user is actively typing in — a background
+  // ISS refresh calls fillPanel() while Settings is open, and re-writing the
+  // parsed number would strip an in-progress decimal (e.g. "44." -> "44").
+  const active = document.activeElement;
+  if (active !== $("set-name")) $("set-name").value = LOCATION.name;
+  if (active !== $("set-lat")) $("set-lat").value = LOCATION.lat;
+  if (active !== $("set-lon")) $("set-lon").value = LOCATION.lon;
   $("set-mag").value = SETTINGS.magLimit;
   $("magval").textContent = `≤ ${SETTINGS.magLimit.toFixed(1)}`;
   $("set-starnames").value = STAR_NAME_CHOICES[SETTINGS.starNames];
