@@ -19,19 +19,21 @@ jobs:
 
       - name: Write version into sw.js
         run: |
-          VERSION="$(date -u +%Y.%m.%d)-$(gi
-          echo "Version: $VERSION"
-          sed -i -E "s|(const CACHE = \"skyrN}\2|" sw.js
-          grep "const CACHE" sw.js
+          set -euxo pipefail
+          test -f sw.js || { echo "sw.js not found in $(pwd)"; ls -la; exit 1; }
+          VERSION="$(date -u +%Y.%m.%d)-${GITHUB_SHA::7}"
+          echo "Stamping version: $VERSION"
+          sed -i -E 's|(const CACHE = "skyraven-v)[^"]*(")|\1'"${VERSION}"'\2|' sw.js
+          grep -F 'const CACHE' sw.js
 
       - name: Commit if changed
         run: |
           if git diff --quiet -- sw.js; then
-            echo "sw.js version unchanged; n
+            echo "sw.js version unchanged; nothing to commit."
             exit 0
           fi
           git config user.name  "github-actions[bot]"
-          git config user.email "41898282+giply.github.com"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add sw.js
-          git commit -m "chore: stamp versio
+          git commit -m "chore: stamp version"
           git push
