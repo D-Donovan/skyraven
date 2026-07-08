@@ -1,0 +1,38 @@
+name: Refresh ISS TLE
+
+on:
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: refresh-tle
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch latest ISS TLE
+        run: |
+          curl -fsS --retry 3 --retry-delay 5 --max-time 30 \
+            "https://api.wheretheiss.at/v1/satellites/25544/tles" -o /tmp/tle.json
+          jq -c '{line1, line2, tle_timestamp}' /tmp/tle.json > data/iss-tle.json
+          echo "Updated: $(cat data/iss-tle.json)"
+
+      - name: Commit if changed
+        run: |
+          if git diff --quiet -- data/iss-tle.json; then
+            echo "TLE unchanged; nothing to commit."
+            exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/iss-tle.json
+          git commit -m "chore: auto-refresh ISS TLE"
+          git push
