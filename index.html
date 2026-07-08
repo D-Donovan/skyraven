@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>SkyRaven</title>
+  <link rel="manifest" href="./manifest.json" />
+  <meta name="theme-color" content="#05050b" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png" />
+  <link rel="icon" type="image/png" href="./icons/icon-192.png" />
+  <style>
+    :root { color-scheme: dark; --accent: #8fe0a0; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; background: #05050b; overflow: hidden; }
+    body { font: 13px system-ui, sans-serif; color: #ccc; }
+    #wrap { position: fixed; inset: 0; display: flex; flex-direction: column; }
+    #bar { padding: 6px 10px; display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: center;
+           background: #0b0b16; border-bottom: 1px solid #1a1a2a; color: var(--accent); }
+    #bar b { color: var(--accent); font-weight: 600; }
+    #bar .muted { color: var(--accent); }
+    #bar #loc { order: 5; flex: 0 0 100%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #suntimes { white-space: nowrap; font-size: 12px; }
+    #ver { font-size: 11px; opacity: .6; }
+    #gear { margin-left: auto; background: #1a1a2a; color: #ddd; border: 1px solid #2a2a3e;
+            border-radius: 6px; font-size: 16px; line-height: 1; padding: 6px 9px; cursor: pointer; }
+    #gear:hover { background: #24243a; }
+    #stage { position: relative; flex: 1; min-height: 0; }
+    #sky, #iss-layer { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+    #iss-layer { pointer-events: none; }   /* taps fall through to the sky */
+    #sky { touch-action: manipulation; }
+    #status { padding: 5px 10px; background: #0b0b16; border-top: 1px solid #1a1a2a;
+              color: var(--accent); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    /* ISS next-pass readout, anchored on the left over the sky (taps pass through) */
+    #iss { position: absolute; left: 10px; top: 6px; max-width: 220px;
+           padding: 8px 10px; border-radius: 8px; pointer-events: none;
+           background: rgba(8,8,18,0.66); border: 1px solid #20203200;
+           color: var(--accent); font-size: 12px; line-height: 1.5; }
+    #iss b { font-size: 12px; }
+
+    /* settings overlay */
+    #overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.55);
+               display: flex; align-items: center; justify-content: center; z-index: 10; }
+    #overlay[hidden] { display: none; }
+    #panel { width: min(460px, 92vw); max-height: 88vh; overflow: auto;
+             background: #11111d; border: 1px solid #2a2a3e; border-radius: 12px;
+             padding: 18px 18px 14px; box-shadow: 0 10px 40px rgba(0,0,0,0.6); }
+    #panel h2 { margin: 0 0 12px; font-size: 16px; color: #f2f2f2; }
+    #panel label { display: block; margin: 10px 0 4px; color: #f2f2f2; }
+    #panel input[type=text], #panel input[type=number], #panel select {
+      width: 100%; padding: 7px 8px; background: #0a0a14; color: #f2f2f2;
+      border: 1px solid #2a2a3e; border-radius: 6px; font: inherit; }
+    #panel input[type=range] { width: 100%; }
+    #panel .row2 { display: flex; gap: 10px; }
+    #panel .row2 > label { flex: 1; }
+    #panel .ck { display: flex; align-items: center; gap: 8px; margin: 12px 0 0; cursor: pointer; }
+    #panel .ck input { width: auto; }
+    #panel button { background: #1f6feb; color: #fff; border: 0; border-radius: 7px;
+                    padding: 9px 12px; font: inherit; cursor: pointer; }
+    #panel button.secondary { background: #24243a; }
+    #panel button:hover { filter: brightness(1.1); }
+    #set-locstatus { min-height: 16px; margin-top: 6px; color: #f2f2f2; font-size: 12px; }
+    #panel .actions { display: flex; justify-content: space-between; gap: 10px; margin-top: 16px; }
+    #magval { color: #f2f2f2; }
+  </style>
+</head>
+<body>
+  <div id="wrap">
+    <div id="bar">
+      <span id="clock" class="muted">—</span>
+      <span id="loc"><b>SkyRaven</b></span>
+      <span id="suntimes" class="muted" title="Sunrise / Sunset"></span>
+      <button id="gear" title="Settings" aria-label="Settings">⚙</button>
+    </div>
+    <div id="stage">
+      <canvas id="sky"></canvas>
+      <canvas id="iss-layer"></canvas>
+      <div id="iss">ISS — loading…</div>
+    </div>
+    <div id="status">Tap the sky to identify the nearest object.</div>
+  </div>
+
+  <div id="overlay" hidden>
+    <div id="panel">
+      <h2>Settings</h2>
+
+      <label for="set-name">Location name</label>
+      <input id="set-name" type="text" autocomplete="off" />
+
+      <div class="row2">
+        <div><label for="set-lat">Latitude</label>
+          <input id="set-lat" type="number" step="0.01" inputmode="decimal" /></div>
+        <div><label for="set-lon">Longitude (E+)</label>
+          <input id="set-lon" type="number" step="0.01" inputmode="decimal" /></div>
+      </div>
+      <label for="set-locate" style="margin-top:12px">Detect location</label>
+      <button id="set-locate" class="secondary">Locate (use my location)</button>
+      <div id="set-locstatus"></div>
+
+      <label for="set-mag">Star limit (mag): <span id="magval"></span></label>
+      <input id="set-mag" type="range" min="2" max="6.5" step="0.5" />
+
+      <label for="set-starnames">Star names</label>
+      <select id="set-starnames">
+        <option>None</option><option>Bright</option><option>Medium</option><option>All</option>
+      </select>
+
+      <label class="ck"><input id="set-messier" type="checkbox" /> Messier objects</label>
+      <label class="ck"><input id="set-planets" type="checkbox" /> Planet names</label>
+      <label class="ck"><input id="set-const" type="checkbox" /> Constellation names</label>
+      <label class="ck"><input id="set-grid" type="checkbox" /> Grid + ecliptic</label>
+      <label class="ck"><input id="set-night" type="checkbox" /> Night (red) mode</label>
+
+      <div id="set-tleinfo" class="muted" style="margin-top:12px; font-size:12px; opacity:.75;"></div>
+
+      <div class="actions">
+        <button id="set-reset" class="secondary">Reset display settings</button>
+        <button id="set-close">Close</button>
+      </div>
+      <div id="ver" class="muted" style="text-align:center; margin-top:14px; font-size:11px; opacity:.6;"></div>
+    </div>
+  </div>
+
+  <!-- satellite.js (SGP4) as a classic script so window.satellite is ready for the module -->
+  <script src="./js/vendor/satellite.min.js"></script>
+  <script type="module" src="./js/app.js"></script>
+</body>
+</html>

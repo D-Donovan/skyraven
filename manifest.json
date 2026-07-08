@@ -1,0 +1,16 @@
+{
+  "name": "SkyRaven",
+  "short_name": "SkyRaven",
+  "description": "A live planetarium: stars, constellations, planets, Sun and Moon for your location.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#05050b",
+  "theme_color": "#05050b",
+  "icons": [
+    { "src": "./icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "./icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "./icons/icon-512-maskable.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
