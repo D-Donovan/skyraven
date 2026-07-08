@@ -6,7 +6,7 @@
 
 import {
   localSiderealTime, daysSince1990, calculatePosition, raDecFromAzEl,
-  sunRaDec, moonPhaseRaDec, planetRaDec, PLANETS, toRad, sunTimes,
+  sunRaDec, moonPhaseRaDec, planetRaDec, PLANETS, toRad, sunTimes, moonTimes,
 } from "./astro.js";
 import { project, screenToAzEl, rayValid, rayValidDiameter } from "./projection.js";
 import { loadCatalog, starStyle, rgb } from "./catalog.js";
@@ -203,6 +203,12 @@ function sunTimesText(dt, offset) {
   if (t.alwaysDown) return "☀ down all day";
   return `☀ ${fmtHM(t.rise)} / ${fmtHM(t.set)}`;
 }
+function moonTimesText(dt, offset) {
+  const t = moonTimes(dt, LOCATION.lon, LOCATION.lat, offset);
+  if (t.alwaysUp) return "🌙 up all day";
+  if (t.alwaysDown) return "🌙 down all day";
+  return `🌙 ${fmtHM(t.rise)} / ${fmtHM(t.set)}`;
+}
 function titleCase(name) {
   return name.replace(/_/g, " ").toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
 }
@@ -341,6 +347,7 @@ function draw() {
   $("loc").innerHTML = `<b>${LOCATION.name || "SkyRaven"}</b> &nbsp; `
     + `${Math.abs(LOCATION.lat).toFixed(2)}°${ns}, ${Math.abs(LOCATION.lon).toFixed(2)}°${ew}`;
   $("suntimes").textContent = sunTimesText(dt, offset);
+  $("moontimes").textContent = moonTimesText(dt, offset);
 
   drawISS();
 }
@@ -542,7 +549,9 @@ function wirePanel() {
 }
 
 // Version is sourced from sw.js's CACHE constant (e.g. "skyraven-v2026.07.03")
-// so there's a single place to bump on each deploy.
+// so there's a single place to bump on each deploy. Fetched cache-proof (unique
+// query + no-store) so the displayed version always reflects the live deploy and
+// can never be shadowed by the HTTP cache or a controlling service worker.
 async function loadVersion() {
   try {
     const res = await fetch(`./sw.js?_=${Date.now()}`, { cache: "no-store" });
@@ -584,8 +593,26 @@ window.addEventListener("resize", resize);
   // across — the sky canvas underneath is left untouched (no full repaint).
   setInterval(drawISS, 2000);
 
-  // PWA: register the offline service worker (no-op on unsupported browsers).
+  // PWA: register the service worker and auto-apply new deploys.
+  //  - updateViaCache:"none" makes the browser always re-fetch sw.js (not the HTTP
+  //    cache) when checking for updates, so a fresh deploy is detected right away.
+  //  - a 60 s poll picks up a deploy even while the page stays open.
+  //  - when the new SW takes control we reload once, so the new code goes live
+  //    without a manual hard-refresh. Guarded so it never loops and never fires on
+  //    the first (uncontrolled) load.
   if ("serviceWorker" in navigator) {
-    window.addEventListener("load", () => navigator.serviceWorker.register("./sw.js").catch(() => {}));
+    let reloading = false;
+    const hadController = !!navigator.serviceWorker.controller;
+    navigator.serviceWorker.addEventListener("controllerchange", () => {
+      if (reloading || !hadController) return;
+      reloading = true;
+      window.location.reload();
+    });
+    window.addEventListener("load", async () => {
+      try {
+        const reg = await navigator.serviceWorker.register("./sw.js", { updateViaCache: "none" });
+        setInterval(() => reg.update().catch(() => {}), 60000);
+      } catch { /* SW unsupported or blocked — the app still works */ }
+    });
   }
 })();

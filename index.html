@@ -22,7 +22,7 @@
     #bar b { color: var(--accent); font-weight: 600; }
     #bar .muted { color: var(--accent); }
     #bar #loc { order: 5; flex: 0 0 100%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    #suntimes { white-space: nowrap; font-size: 12px; }
+    #suntimes, #moontimes { white-space: nowrap; font-size: 12px; }
     #ver { font-size: 11px; opacity: .6; }
     #gear { margin-left: auto; background: #1a1a2a; color: #ddd; border: 1px solid #2a2a3e;
             border-radius: 6px; font-size: 16px; line-height: 1; padding: 6px 9px; cursor: pointer; }
@@ -72,6 +72,7 @@
       <span id="clock" class="muted">—</span>
       <span id="loc"><b>SkyRaven</b></span>
       <span id="suntimes" class="muted" title="Sunrise / Sunset"></span>
+      <span id="moontimes" class="muted" title="Moonrise / Moonset"></span>
       <button id="gear" title="Settings" aria-label="Settings">⚙</button>
     </div>
     <div id="stage">
@@ -90,7 +91,7 @@
       <input id="set-name" type="text" autocomplete="off" />
 
       <div class="row2">
-<div><label for="set-lat">Latitude</label>
+        <div><label for="set-lat">Latitude</label>
           <input id="set-lat" type="text" inputmode="decimal" autocomplete="off" /></div>
         <div><label for="set-lon">Longitude (E+)</label>
           <input id="set-lon" type="text" inputmode="decimal" autocomplete="off" /></div>

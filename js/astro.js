@@ -307,6 +307,59 @@ export function sunTimes(dt, longitude, latitude, utcOffset) {
   return { rise, set, alwaysUp, alwaysDown };
 }
 
+// --- Moonrise / moonset ------------------------------------------------------
+// Center-of-disk altitude at rise/set: the Moon's horizontal parallax (~0.95°)
+// nearly cancels refraction (~34') plus its semidiameter (~16'), leaving ~+0.125°.
+const MOONRISE_ALT = 0.125;
+
+function moonAltitudeAt(civil, longitude, latitude, utcOffset) {
+  const days = daysSince1990(civil, utcOffset);
+  const [ra, dec] = moonPhaseRaDec(days);   // recomputed each step -> tracks fast motion
+  const lst = localSiderealTime(civil, longitude, utcOffset);
+  return calculatePosition(lst, ra, dec, latitude).el;
+}
+
+// Moonrise/moonset for the civil DATE in `dt` (time-of-day fields ignored).
+// Same contract as sunTimes(): { rise, set, alwaysUp, alwaysDown } with rise/set
+// as {h, mi} in local civil time, or null if that edge doesn't occur that date.
+export function moonTimes(dt, longitude, latitude, utcOffset) {
+  const civilAt = (mins) => {
+    const h = Math.floor(mins / 60);
+    const mi = Math.floor(mins % 60);
+    const s = Math.round((mins - Math.floor(mins)) * 60);
+    return { y: dt.y, mo: dt.mo, d: dt.d, h, mi, s };
+  };
+  const altAt = (mins) => moonAltitudeAt(civilAt(mins), longitude, latitude, utcOffset);
+
+  const STEP = 10;
+  let rise = null, set = null;
+  let prevMins = 0, prevAlt = altAt(0);
+
+  const bisect = (m0, a0, m1, a1) => {
+    const risingEdge = a1 >= MOONRISE_ALT;
+    for (let i = 0; i < 20; i++) {
+      const mm = (m0 + m1) / 2;
+      const am = altAt(mm);
+      if ((am >= MOONRISE_ALT) === risingEdge && am !== a0) { m1 = mm; a1 = am; } else { m0 = mm; a0 = am; }
+    }
+    const mins = Math.round((m0 + m1) / 2);
+    return { h: Math.floor(mins / 60) % 24, mi: mins % 60 };
+  };
+
+  for (let m = STEP; m <= 1439; m += STEP) {
+    const mins = Math.min(m, 1439);
+    const alt = altAt(mins);
+    if (rise === null && prevAlt < MOONRISE_ALT && alt >= MOONRISE_ALT) rise = bisect(prevMins, prevAlt, mins, alt);
+    if (set === null && prevAlt >= MOONRISE_ALT && alt < MOONRISE_ALT) set = bisect(prevMins, prevAlt, mins, alt);
+    prevMins = mins;
+    prevAlt = alt;
+  }
+
+  const alwaysUp = rise === null && set === null && prevAlt >= MOONRISE_ALT;
+  const alwaysDown = rise === null && set === null && prevAlt < MOONRISE_ALT;
+  return { rise, set, alwaysUp, alwaysDown };
+}
+
 // --- Coordinate transforms -------------------------------------------------
 // RA/Dec -> {az, el} in degrees.
 export function calculatePosition(lst, ra, dec, latitude) {
