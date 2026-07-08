@@ -541,7 +541,7 @@ function wirePanel() {
 // so there's a single place to bump on each deploy.
 async function loadVersion() {
   try {
-    const res = await fetch("./sw.js");
+    const res = await fetch(`./sw.js?_=${Date.now()}`, { cache: "no-store" });
     const src = await res.text();
     const m = src.match(/CACHE\s*=\s*"skyraven-v([^"]+)"/);
     return m ? m[1] : "unknown";
