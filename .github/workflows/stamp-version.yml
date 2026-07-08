@@ -1,0 +1,37 @@
+name: Stamp version
+
+on:
+  push:
+    branches: [ main ]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: stamp-version
+  cancel-in-progress: false
+
+jobs:
+  stamp:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Write version into sw.js
+        run: |
+          VERSION="$(date -u +%Y.%m.%d)-$(gi
+          echo "Version: $VERSION"
+          sed -i -E "s|(const CACHE = \"skyrN}\2|" sw.js
+          grep "const CACHE" sw.js
+
+      - name: Commit if changed
+        run: |
+          if git diff --quiet -- sw.js; then
+            echo "sw.js version unchanged; n
+            exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+giply.github.com"
+          git add sw.js
+          git commit -m "chore: stamp versio
+          git push
