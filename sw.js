@@ -4,7 +4,7 @@
 // app.js also fetches this file and parses CACHE to show the version in Settings,
 // so this is the single place to update.
 
-const CACHE = "skyraven-v2026.07.08-9e715b8";
+const CACHE = "skyraven-v2026.07.08-5531a53";
 const ASSETS = [
   "./",
   "./index.html",
