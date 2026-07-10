@@ -431,9 +431,9 @@ function refreshISS() {
 const passClock = (d) => d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 const passDate = (d) => d.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
 
-// Render the current sky plus the next visible ISS pass track to an offscreen
-// canvas. `light` produces a print-friendly white-background chart. Returns
-// { blob, summary, filename }; throws a friendly Error otherwise.
+// Render the next visible ISS pass to a PNG. `light` produces a print-friendly,
+// black-and-white 8.5x11 PORTRAIT PAGE (sized to fill Letter paper); otherwise a
+// dark viewport snapshot for on-screen viewing. Returns { blob, summary, filename }.
 async function buildPassChart(light = false) {
   const satrec = getCachedSatrec();
   if (!satrec) throw new Error("ISS orbit isn't loaded yet — give it a moment, then try again.");
@@ -441,98 +441,128 @@ async function buildPassChart(light = false) {
   const pass = nextOrCurrentVisiblePass(satrec, loc, new Date(), 48);
   if (!pass) throw new Error("No visible ISS pass in the next 48 h from your location.");
 
-  draw();  // make sure the sky snapshot is current
+  draw();  // refresh the live sky snapshot we sample from
 
-  // Print theme reads on white; screen theme reads on the dark sky.
-  const theme = light ? {
-    track: "#0b5cad", underlay: "rgba(255,255,255,0.85)",
-    rise: "#1a7f37", max: "#9a6a00", set: "#c1121f",
-    labelText: "#111", labelHalo: "#fff",
-    panelBg: "rgba(255,255,255,0.85)", panelTitle: "#0b5cad", panelText: "#222",
-  } : {
-    track: "#5fe6ff", underlay: "rgba(0,0,0,0.6)",
-    rise: "#7CFC7C", max: "#FFD24A", set: "#FF6B6B",
-    labelText: "#fff", labelHalo: "#000",
-    panelBg: "rgba(6,10,20,0.74)", panelTitle: "#5fe6ff", panelText: "#e6edf3",
-  };
-
-  const dpr = canvas.clientWidth ? canvas.width / canvas.clientWidth : (window.devicePixelRatio || 1);
-  const off = document.createElement("canvas");
-  off.width = canvas.width;
-  off.height = canvas.height;
-  const o = off.getContext("2d");
-
-  // opaque background + the live sky (+ ISS marker on screen theme), 1:1 backing px
-  o.fillStyle = col(C.bg);
-  o.fillRect(0, 0, off.width, off.height);
-  o.drawImage(canvas, 0, 0);
-  if (!light) o.drawImage(issCanvas, 0, 0);
-
-  // Print mode: invert the sky pixels (dark bg -> white, white stars -> dark) so
-  // it's legible and ink-light on paper. Done before the vector overlay so the
-  // track/markers/caption keep their tuned print colors.
-  if (light) {
-    const img = o.getImageData(0, 0, off.width, off.height);
-    const d = img.data;
-    for (let i = 0; i < d.length; i += 4) { d[i] = 255 - d[i]; d[i + 1] = 255 - d[i + 1]; d[i + 2] = 255 - d[i + 2]; }
-    o.putImageData(img, 0, 0);
-  }
-
-  // vector overlay in logical (CSS-pixel) coordinates, like the live renderer
-  o.setTransform(dpr, 0, 0, dpr, 0, 0);
-  const { cx, cy, radius } = geom;
-
-  // sample rise -> set and stroke the ground track (contrast underlay + main line)
+  // Pass geometry + caption text (layout-independent)
   const t0 = pass.rise.date.getTime(), t1 = pass.set.date.getTime();
-  const pts = [];
-  for (let i = 0; i <= 64; i++) {
-    const s = issNow(satrec, loc, new Date(t0 + ((t1 - t0) * i) / 64));
-    pts.push(project(s.az, Math.max(0, s.el), cx, cy, radius));
-  }
-  o.lineJoin = "round";
-  o.lineWidth = 4.5; o.strokeStyle = theme.underlay;
-  o.beginPath(); pts.forEach((p, i) => (i ? o.lineTo(p.x, p.y) : o.moveTo(p.x, p.y))); o.stroke();
-  o.lineWidth = 2.4; o.strokeStyle = theme.track;
-  o.beginPath(); pts.forEach((p, i) => (i ? o.lineTo(p.x, p.y) : o.moveTo(p.x, p.y))); o.stroke();
-
-  const mark = (az, el, label, color) => {
-    const p = project(az, Math.max(0, el), cx, cy, radius);
-    o.fillStyle = color;
-    o.beginPath(); o.arc(p.x, p.y, 4, 0, 2 * Math.PI); o.fill();
-    o.font = "bold 12px system-ui, sans-serif";
-    o.textAlign = "left"; o.textBaseline = "middle";
-    o.fillStyle = theme.labelHalo; o.fillText(label, p.x + 8, p.y + 1);
-    o.fillStyle = theme.labelText; o.fillText(label, p.x + 7, p.y);
-  };
+  const azel = [];
+  for (let i = 0; i <= 64; i++) azel.push(issNow(satrec, loc, new Date(t0 + ((t1 - t0) * i) / 64)));
   const maxAz = issNow(satrec, loc, pass.max.date).az;
-  mark(pass.rise.az, 0, "Rise", theme.rise);
-  mark(maxAz, pass.max.el, "Max", theme.max);
-  mark(pass.set.az, 0, "Set", theme.set);
-
-  // caption panel (top-left)
   const compass = (a) => `${Math.round(a)}°`;
+  const title = `${LOCATION.name || "SkyRaven"} — next visible ISS pass`;
   const lines = [
-    `${LOCATION.name || "SkyRaven"} — next visible ISS pass`,
     passDate(pass.rise.date),
     `Rise ${passClock(pass.rise.date)}  az ${compass(pass.rise.az)}`,
     `Max  ${passClock(pass.max.date)}  alt ${Math.round(pass.max.el)}°`,
     `Set  ${passClock(pass.set.date)}  az ${compass(pass.set.az)}`,
   ];
-  const lineH = 16, pad = 9, boxW = 232, boxH = pad * 2 + lineH * lines.length;
-  o.fillStyle = theme.panelBg;
-  o.fillRect(6, 6, boxW, boxH);
-  o.textAlign = "left"; o.textBaseline = "top";
-  lines.forEach((ln, i) => {
-    o.font = (i === 0 ? "bold " : "") + "12px system-ui, sans-serif";
-    o.fillStyle = i === 0 ? theme.panelTitle : theme.panelText;
-    o.fillText(ln, 6 + pad, 6 + pad + i * lineH);
-  });
+
+  const dpr = canvas.clientWidth ? canvas.width / canvas.clientWidth : (window.devicePixelRatio || 1);
+
+  // Draw the ISS track + Rise/Max/Set markers into ctx `o` at the given circle
+  // geometry. Rise=ring, Max=dot, Set=square, so they read without colour too.
+  const drawOverlay = (o, cx, cy, radius, s) => {
+    const P = (az, el) => project(az, Math.max(0, el), cx, cy, radius);
+    const pts = azel.map((v) => P(v.az, v.el));
+    o.lineJoin = "round";
+    o.lineWidth = s.trackW * 1.9; o.strokeStyle = s.underlay;
+    o.beginPath(); pts.forEach((p, i) => (i ? o.lineTo(p.x, p.y) : o.moveTo(p.x, p.y))); o.stroke();
+    o.lineWidth = s.trackW; o.strokeStyle = s.track;
+    o.beginPath(); pts.forEach((p, i) => (i ? o.lineTo(p.x, p.y) : o.moveTo(p.x, p.y))); o.stroke();
+    const mark = (az, el, label, color, shape) => {
+      const p = P(az, el);
+      o.strokeStyle = color; o.fillStyle = color; o.lineWidth = Math.max(1.5, s.markR * 0.5);
+      o.beginPath();
+      if (shape === "square") o.rect(p.x - s.markR, p.y - s.markR, s.markR * 2, s.markR * 2);
+      else o.arc(p.x, p.y, s.markR, 0, 2 * Math.PI);
+      if (shape === "ring") o.stroke(); else o.fill();
+      o.font = `bold ${s.labelPx}px system-ui, sans-serif`;
+      o.textAlign = "left"; o.textBaseline = "middle";
+      const dx = s.markR + 3;
+      o.fillStyle = s.labelHalo; o.fillText(label, p.x + dx + 1, p.y + 1);
+      o.fillStyle = s.labelText; o.fillText(label, p.x + dx, p.y);
+    };
+    mark(pass.rise.az, 0, "Rise", s.rise, "ring");
+    mark(maxAz, pass.max.el, "Max", s.max, "dot");
+    mark(pass.set.az, 0, "Set", s.set, "square");
+  };
+
+  const off = document.createElement("canvas");
+  let o, filename;
+  const stamp = pass.rise.date.toISOString().slice(0, 16).replace(/[:T]/g, "-");
+
+  if (light) {
+    // ---- 8.5 x 11 portrait page, black-and-white, sized to fill the paper ----
+    const DPI = 150, PW = Math.round(8.5 * DPI), PH = Math.round(11 * DPI), M = 66;
+    off.width = PW; off.height = PH; o = off.getContext("2d");
+    o.fillStyle = "#fff"; o.fillRect(0, 0, PW, PH);
+
+    // header block
+    o.fillStyle = "#000"; o.textAlign = "left"; o.textBaseline = "top";
+    o.font = "bold 30px system-ui, sans-serif"; o.fillText(title, M, M);
+    o.font = "22px system-ui, sans-serif";
+    lines.forEach((ln, i) => o.fillText(ln, M, M + 46 + i * 30));
+    const headerBottom = M + 46 + lines.length * 30 + 8;
+    o.strokeStyle = "#000"; o.lineWidth = 1;
+    o.beginPath(); o.moveTo(M, headerBottom); o.lineTo(PW - M, headerBottom); o.stroke();
+
+    // circle fills the page width; centred vertically in the space below the header
+    const radius = (PW - 2 * M) / 2, cx = PW / 2;
+    const cropR = geom.radius + 12, scale = radius / geom.radius, destSize = 2 * cropR * scale;
+    const availTop = headerBottom + 14, availBot = PH - M;
+    let cy = (availTop + availBot) / 2;
+    cy = Math.max(availTop + destSize / 2, Math.min(cy, availBot - destSize / 2));
+
+    // crop the sky circle from the live canvas (pad keeps edge labels) and scale in
+    o.drawImage(canvas,
+      (geom.cx - cropR) * dpr, (geom.cy - cropR) * dpr, 2 * cropR * dpr, 2 * cropR * dpr,
+      cx - destSize / 2, cy - destSize / 2, destSize, destSize);
+
+    // inverted grayscale over just the drawn circle region -> ink-light, mono-safe
+    const rx = Math.max(0, Math.floor(cx - destSize / 2)), ry = Math.max(0, Math.floor(cy - destSize / 2));
+    const rw = Math.min(PW - rx, Math.ceil(destSize)), rh = Math.min(PH - ry, Math.ceil(destSize));
+    const img = o.getImageData(rx, ry, rw, rh), d = img.data;
+    for (let i = 0; i < d.length; i += 4) {
+      const g = 255 - (0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]);
+      d[i] = d[i + 1] = d[i + 2] = g;
+    }
+    o.putImageData(img, rx, ry);
+
+    drawOverlay(o, cx, cy, radius, {
+      trackW: 4, underlay: "rgba(255,255,255,0.9)", track: "#000",
+      rise: "#000", max: "#000", set: "#000", markR: 7, labelPx: 20,
+      labelText: "#000", labelHalo: "#fff",
+    });
+    filename = `skyraven-iss-pass-${stamp}-print.png`;
+  } else {
+    // ---- dark viewport snapshot for on-screen viewing / phone share ----
+    off.width = canvas.width; off.height = canvas.height; o = off.getContext("2d");
+    o.fillStyle = col(C.bg); o.fillRect(0, 0, off.width, off.height);
+    o.drawImage(canvas, 0, 0); o.drawImage(issCanvas, 0, 0);
+    o.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const { cx, cy, radius } = geom;
+
+    const cap = [title, ...lines];
+    const lineH = 16, pad = 9, boxW = 232, boxH = pad * 2 + lineH * cap.length;
+    o.fillStyle = "rgba(6,10,20,0.74)"; o.fillRect(6, 6, boxW, boxH);
+    o.textAlign = "left"; o.textBaseline = "top";
+    cap.forEach((ln, i) => {
+      o.font = (i === 0 ? "bold " : "") + "12px system-ui, sans-serif";
+      o.fillStyle = i === 0 ? "#5fe6ff" : "#e6edf3";
+      o.fillText(ln, 6 + pad, 6 + pad + i * lineH);
+    });
+
+    drawOverlay(o, cx, cy, radius, {
+      trackW: 2.4, underlay: "rgba(0,0,0,0.6)", track: "#5fe6ff",
+      rise: "#7CFC7C", max: "#FFD24A", set: "#FF6B6B", markR: 4.5, labelPx: 12,
+      labelText: "#fff", labelHalo: "#000",
+    });
+    filename = `skyraven-iss-pass-${stamp}.png`;
+  }
 
   const blob = await new Promise((res) => off.toBlob(res, "image/png"));
   if (!blob) throw new Error("Couldn't render the chart image on this browser.");
-  const stamp = pass.rise.date.toISOString().slice(0, 16).replace(/[:T]/g, "-");
-  const tag = light ? "-print" : "";
-  return { blob, summary: lines.join("\n"), filename: `skyraven-iss-pass-${stamp}${tag}.png` };
+  return { blob, summary: [title, ...lines].join("\n"), filename };
 }
 
 // Share the chart via the native share sheet (attaches the PNG to Mail/Gmail);
@@ -560,13 +590,31 @@ async function sharePassChart() {
     }
   }
 
+  // Desktop fallback: browsers here usually can't attach a file via the share
+  // sheet, and a mailto: draft can't carry an attachment at all. So (1) copy the
+  // chart to the clipboard for a direct paste into the email, (2) download the PNG
+  // as a guaranteed fallback, and (3) open a prefilled draft.
+  let copied = false;
+  try {
+    if (navigator.clipboard && window.ClipboardItem) {
+      await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+      copied = true;
+    }
+  } catch { /* clipboard blocked or unfocused — the download still covers it */ }
+
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url; a.download = filename; a.click();
-  setTimeout(() => URL.revokeObjectURL(url), 10000);
-  const body = encodeURIComponent(`${summary}\n\nAttach the downloaded image: ${filename}`);
-  window.location.href = `mailto:?subject=${encodeURIComponent(title)}&body=${body}`;
-  status.textContent = `Saved ${filename} and opened an email — attach that image to send it.`;
+  setTimeout(() => URL.revokeObjectURL(url), 15000);
+
+  const note = copied
+    ? "the chart is on your clipboard — paste it into this email (Ctrl+V)"
+    : `attach the downloaded image: ${filename}`;
+  window.location.href = `mailto:?subject=${encodeURIComponent(title)}`
+    + `&body=${encodeURIComponent(`${summary}\n\n(${note})`)}`;
+  status.textContent = copied
+    ? `Copied to clipboard + saved ${filename}. Paste into the email (Ctrl+V), or attach the file.`
+    : `Saved ${filename} to Downloads — attach it to the email that just opened.`;
 }
 
 function resize() {
