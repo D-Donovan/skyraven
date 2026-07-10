@@ -565,8 +565,8 @@ async function buildPassChart(light = false) {
   return { blob, summary: [title, ...lines].join("\n"), filename };
 }
 
-// Share the chart via the native share sheet (attaches the PNG to Mail/Gmail);
-// falls back to downloading the PNG + opening a prefilled email draft.
+// Mobile: share the PNG via the native share sheet (attaches to Mail/Gmail).
+// Desktop: download the PNG (to print or attach) and copy it to the clipboard.
 async function sharePassChart() {
   const status = $("set-sharestatus");
   status.textContent = "Building chart…";
@@ -579,21 +579,26 @@ async function sharePassChart() {
   const file = new File([blob], filename, { type: "image/png" });
   const title = "SkyRaven — next visible ISS pass";
 
-  if (navigator.canShare && navigator.canShare({ files: [file] })) {
+  // Use the native share sheet ONLY on mobile — it reliably attaches the PNG to
+  // Mail/Gmail there. On desktop Windows the share sheet hands Mail an EMPTY file,
+  // so we deliberately skip it and give a real downloaded file instead.
+  const uad = navigator.userAgentData;
+  const isMobile = uad ? !!uad.mobile
+    : /Android|iPhone|iPad|iPod|Mobile|Silk|Kindle/i.test(navigator.userAgent);
+  if (isMobile && navigator.canShare && navigator.canShare({ files: [file] })) {
     try {
       await navigator.share({ files: [file], title, text: summary });
       status.textContent = "Shared.";
       return;
     } catch (e) {
       if (e && e.name === "AbortError") { status.textContent = ""; return; }
-      // otherwise fall through to the download/email fallback
+      // otherwise fall through to the download path
     }
   }
 
-  // Desktop fallback: browsers here usually can't attach a file via the share
-  // sheet, and a mailto: draft can't carry an attachment at all. So (1) copy the
-  // chart to the clipboard for a direct paste into the email, (2) download the PNG
-  // as a guaranteed fallback, and (3) open a prefilled draft.
+  // Desktop: download the real PNG (open it to print, or attach it to an email) and
+  // also copy it to the clipboard so it can be pasted straight into a message. No
+  // mailto: draft — a mailto can't carry an attachment, which is what looked "empty".
   let copied = false;
   try {
     if (navigator.clipboard && window.ClipboardItem) {
@@ -607,14 +612,9 @@ async function sharePassChart() {
   a.href = url; a.download = filename; a.click();
   setTimeout(() => URL.revokeObjectURL(url), 15000);
 
-  const note = copied
-    ? "the chart is on your clipboard — paste it into this email (Ctrl+V)"
-    : `attach the downloaded image: ${filename}`;
-  window.location.href = `mailto:?subject=${encodeURIComponent(title)}`
-    + `&body=${encodeURIComponent(`${summary}\n\n(${note})`)}`;
   status.textContent = copied
-    ? `Copied to clipboard + saved ${filename}. Paste into the email (Ctrl+V), or attach the file.`
-    : `Saved ${filename} to Downloads — attach it to the email that just opened.`;
+    ? `Saved ${filename} to Downloads and copied to clipboard — open it to print, or paste (Ctrl+V) into an email.`
+    : `Saved ${filename} to Downloads — open it to print, or attach it to an email.`;
 }
 
 function resize() {
