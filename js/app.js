@@ -10,7 +10,8 @@ import {
 } from "./astro.js";
 import { project, screenToAzEl, rayValid, rayValidDiameter } from "./projection.js";
 import { loadCatalog, starStyle, rgb } from "./catalog.js";
-import { updateIssPanel, getCachedSatrec, issNow, getTleTimestamp, getTleSource } from "./iss.js";
+import { updateIssPanel, getCachedSatrec, issNow, getTleTimestamp, getTleSource,
+  nextOrCurrentVisiblePass } from "./iss.js";
 
 const STORE_KEY = "skyraven.web";
 const STAR_NAME_CHOICES = ["None", "Bright", "Medium", "All"];
@@ -426,6 +427,148 @@ function refreshISS() {
   });
 }
 
+// --- share / email the next-pass finder chart ------------------------------
+const passClock = (d) => d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+const passDate = (d) => d.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
+
+// Render the current sky plus the next visible ISS pass track to an offscreen
+// canvas. `light` produces a print-friendly white-background chart. Returns
+// { blob, summary, filename }; throws a friendly Error otherwise.
+async function buildPassChart(light = false) {
+  const satrec = getCachedSatrec();
+  if (!satrec) throw new Error("ISS orbit isn't loaded yet — give it a moment, then try again.");
+  const loc = { lat: LOCATION.lat, lonE: LOCATION.lon };
+  const pass = nextOrCurrentVisiblePass(satrec, loc, new Date(), 48);
+  if (!pass) throw new Error("No visible ISS pass in the next 48 h from your location.");
+
+  draw();  // make sure the sky snapshot is current
+
+  // Print theme reads on white; screen theme reads on the dark sky.
+  const theme = light ? {
+    track: "#0b5cad", underlay: "rgba(255,255,255,0.85)",
+    rise: "#1a7f37", max: "#9a6a00", set: "#c1121f",
+    labelText: "#111", labelHalo: "#fff",
+    panelBg: "rgba(255,255,255,0.85)", panelTitle: "#0b5cad", panelText: "#222",
+  } : {
+    track: "#5fe6ff", underlay: "rgba(0,0,0,0.6)",
+    rise: "#7CFC7C", max: "#FFD24A", set: "#FF6B6B",
+    labelText: "#fff", labelHalo: "#000",
+    panelBg: "rgba(6,10,20,0.74)", panelTitle: "#5fe6ff", panelText: "#e6edf3",
+  };
+
+  const dpr = canvas.clientWidth ? canvas.width / canvas.clientWidth : (window.devicePixelRatio || 1);
+  const off = document.createElement("canvas");
+  off.width = canvas.width;
+  off.height = canvas.height;
+  const o = off.getContext("2d");
+
+  // opaque background + the live sky (+ ISS marker on screen theme), 1:1 backing px
+  o.fillStyle = col(C.bg);
+  o.fillRect(0, 0, off.width, off.height);
+  o.drawImage(canvas, 0, 0);
+  if (!light) o.drawImage(issCanvas, 0, 0);
+
+  // Print mode: invert the sky pixels (dark bg -> white, white stars -> dark) so
+  // it's legible and ink-light on paper. Done before the vector overlay so the
+  // track/markers/caption keep their tuned print colors.
+  if (light) {
+    const img = o.getImageData(0, 0, off.width, off.height);
+    const d = img.data;
+    for (let i = 0; i < d.length; i += 4) { d[i] = 255 - d[i]; d[i + 1] = 255 - d[i + 1]; d[i + 2] = 255 - d[i + 2]; }
+    o.putImageData(img, 0, 0);
+  }
+
+  // vector overlay in logical (CSS-pixel) coordinates, like the live renderer
+  o.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const { cx, cy, radius } = geom;
+
+  // sample rise -> set and stroke the ground track (contrast underlay + main line)
+  const t0 = pass.rise.date.getTime(), t1 = pass.set.date.getTime();
+  const pts = [];
+  for (let i = 0; i <= 64; i++) {
+    const s = issNow(satrec, loc, new Date(t0 + ((t1 - t0) * i) / 64));
+    pts.push(project(s.az, Math.max(0, s.el), cx, cy, radius));
+  }
+  o.lineJoin = "round";
+  o.lineWidth = 4.5; o.strokeStyle = theme.underlay;
+  o.beginPath(); pts.forEach((p, i) => (i ? o.lineTo(p.x, p.y) : o.moveTo(p.x, p.y))); o.stroke();
+  o.lineWidth = 2.4; o.strokeStyle = theme.track;
+  o.beginPath(); pts.forEach((p, i) => (i ? o.lineTo(p.x, p.y) : o.moveTo(p.x, p.y))); o.stroke();
+
+  const mark = (az, el, label, color) => {
+    const p = project(az, Math.max(0, el), cx, cy, radius);
+    o.fillStyle = color;
+    o.beginPath(); o.arc(p.x, p.y, 4, 0, 2 * Math.PI); o.fill();
+    o.font = "bold 12px system-ui, sans-serif";
+    o.textAlign = "left"; o.textBaseline = "middle";
+    o.fillStyle = theme.labelHalo; o.fillText(label, p.x + 8, p.y + 1);
+    o.fillStyle = theme.labelText; o.fillText(label, p.x + 7, p.y);
+  };
+  const maxAz = issNow(satrec, loc, pass.max.date).az;
+  mark(pass.rise.az, 0, "Rise", theme.rise);
+  mark(maxAz, pass.max.el, "Max", theme.max);
+  mark(pass.set.az, 0, "Set", theme.set);
+
+  // caption panel (top-left)
+  const compass = (a) => `${Math.round(a)}°`;
+  const lines = [
+    `${LOCATION.name || "SkyRaven"} — next visible ISS pass`,
+    passDate(pass.rise.date),
+    `Rise ${passClock(pass.rise.date)}  az ${compass(pass.rise.az)}`,
+    `Max  ${passClock(pass.max.date)}  alt ${Math.round(pass.max.el)}°`,
+    `Set  ${passClock(pass.set.date)}  az ${compass(pass.set.az)}`,
+  ];
+  const lineH = 16, pad = 9, boxW = 232, boxH = pad * 2 + lineH * lines.length;
+  o.fillStyle = theme.panelBg;
+  o.fillRect(6, 6, boxW, boxH);
+  o.textAlign = "left"; o.textBaseline = "top";
+  lines.forEach((ln, i) => {
+    o.font = (i === 0 ? "bold " : "") + "12px system-ui, sans-serif";
+    o.fillStyle = i === 0 ? theme.panelTitle : theme.panelText;
+    o.fillText(ln, 6 + pad, 6 + pad + i * lineH);
+  });
+
+  const blob = await new Promise((res) => off.toBlob(res, "image/png"));
+  if (!blob) throw new Error("Couldn't render the chart image on this browser.");
+  const stamp = pass.rise.date.toISOString().slice(0, 16).replace(/[:T]/g, "-");
+  const tag = light ? "-print" : "";
+  return { blob, summary: lines.join("\n"), filename: `skyraven-iss-pass-${stamp}${tag}.png` };
+}
+
+// Share the chart via the native share sheet (attaches the PNG to Mail/Gmail);
+// falls back to downloading the PNG + opening a prefilled email draft.
+async function sharePassChart() {
+  const status = $("set-sharestatus");
+  status.textContent = "Building chart…";
+  const light = !!($("set-sharelight") && $("set-sharelight").checked);
+  let chart;
+  try { chart = await buildPassChart(light); }
+  catch (e) { status.textContent = e.message; return; }
+
+  const { blob, summary, filename } = chart;
+  const file = new File([blob], filename, { type: "image/png" });
+  const title = "SkyRaven — next visible ISS pass";
+
+  if (navigator.canShare && navigator.canShare({ files: [file] })) {
+    try {
+      await navigator.share({ files: [file], title, text: summary });
+      status.textContent = "Shared.";
+      return;
+    } catch (e) {
+      if (e && e.name === "AbortError") { status.textContent = ""; return; }
+      // otherwise fall through to the download/email fallback
+    }
+  }
+
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename; a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+  const body = encodeURIComponent(`${summary}\n\nAttach the downloaded image: ${filename}`);
+  window.location.href = `mailto:?subject=${encodeURIComponent(title)}&body=${body}`;
+  status.textContent = `Saved ${filename} and opened an email — attach that image to send it.`;
+}
+
 function resize() {
   const dpr = window.devicePixelRatio || 1;
   const w = canvas.clientWidth, h = canvas.clientHeight;
@@ -540,6 +683,7 @@ function wirePanel() {
   $("set-reset").addEventListener("click", resetDisplaySettings);
   $("overlay").addEventListener("click", (e) => { if (e.target.id === "overlay") $("overlay").hidden = true; });
   $("set-locate").addEventListener("click", locate);
+  $("set-share").addEventListener("click", sharePassChart);
   const debouncedIds = new Set(["set-name", "set-lat", "set-lon"]);
   // live-apply on any control change
   for (const id of ["set-name", "set-lat", "set-lon", "set-mag", "set-starnames",
