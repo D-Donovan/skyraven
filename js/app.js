@@ -413,8 +413,16 @@ function identify(px, py) {
   }
   if (nearestM) flashHighlight(nearestM.x, nearestM.y);
   const obj = nearestM ? `${nearestM.detail}   ·   ` : "";
-  $("status").textContent = `${obj}Az ${aa.az.toFixed(1)}°  El ${aa.el.toFixed(1)}°   `
+  const coordLine = `Az ${aa.az.toFixed(1)}°  El ${aa.el.toFixed(1)}°   `
     + `RA ${rd.ra.toFixed(2)}h  Dec ${rd.dec.toFixed(1)}°`;
+  $("status").textContent = `${obj}${coordLine}`;
+
+  // Mirror the same info as a floating card over the sky (see #identify in index.html)
+  // so it's readable right where the user is looking, even pinch-zoomed away from
+  // the bottom #status bar.
+  const idEl = $("identify");
+  idEl.innerHTML = nearestM ? `<b>${nearestM.detail}</b><br>${coordLine}` : coordLine;
+  idEl.hidden = false;
 }
 
 // Recompute + redraw the ISS next-visible-pass panel (async, fire-and-forget).
@@ -755,13 +763,37 @@ async function loadVersion() {
   }
 }
 
+// Tap-to-identify must not fire for the first finger of a pinch: a pinch gesture
+// also begins with a pointerdown, indistinguishable at that instant from a real tap.
+// So identification is deferred to pointerup, and cancelled if a second pointer joins
+// (pinch has started) or the pointer travels more than a few px (a drag, not a tap).
+const TAP_MOVE_TOLERANCE = 10; // css px
+let tapCandidate = null; // { id, x, y }
+
+function clearTapCandidate() { tapCandidate = null; }
+
 canvas.addEventListener("pointerdown", (ev) => {
+  if (tapCandidate) { clearTapCandidate(); return; } // 2nd pointer down -> pinch, not a tap
   const r = canvas.getBoundingClientRect();
   const px = ev.clientX - r.left, py = ev.clientY - r.top;
   const { cx, cy, radius } = geom;
   if (Math.hypot(px - cx, py - cy) > radius) return; // outside the drawn sky circle
-  identify(px, py);
+  tapCandidate = { id: ev.pointerId, x: px, y: py };
 });
+
+canvas.addEventListener("pointermove", (ev) => {
+  if (!tapCandidate || ev.pointerId !== tapCandidate.id) return;
+  const r = canvas.getBoundingClientRect();
+  const px = ev.clientX - r.left, py = ev.clientY - r.top;
+  if (Math.hypot(px - tapCandidate.x, py - tapCandidate.y) > TAP_MOVE_TOLERANCE) clearTapCandidate();
+});
+
+canvas.addEventListener("pointerup", (ev) => {
+  if (tapCandidate && ev.pointerId === tapCandidate.id) identify(tapCandidate.x, tapCandidate.y);
+  clearTapCandidate();
+});
+
+canvas.addEventListener("pointercancel", clearTapCandidate);
 window.addEventListener("resize", resize);
 
 (async function main() {

@@ -39,6 +39,15 @@
            background: rgba(8,8,18,0.66); border: 1px solid #20203200;
            color: var(--accent); font-size: 12px; line-height: 1.5; }
     #iss b { font-size: 12px; }
+    /* Tap-to-identify result, mirrored here (not just the bottom #status bar) so it
+       stays visible over the sky itself while pinch-zoomed/panned. Anchored top-right
+       so it doesn't collide with #iss. */
+    #identify { position: absolute; right: 10px; top: 6px; max-width: 240px;
+           padding: 8px 10px; border-radius: 8px; pointer-events: none;
+           background: rgba(8,8,18,0.66); border: 1px solid #20203200;
+           color: var(--accent); font-size: 12px; line-height: 1.5; text-align: right; }
+    #identify b { font-size: 12px; }
+    #identify[hidden] { display: none; }
 
     /* settings overlay */
     #overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.55);
@@ -79,6 +88,7 @@
       <canvas id="sky"></canvas>
       <canvas id="iss-layer"></canvas>
       <div id="iss">ISS — loading…</div>
+      <div id="identify" hidden></div>
     </div>
     <div id="status">Tap the sky to identify the nearest object.</div>
   </div>
