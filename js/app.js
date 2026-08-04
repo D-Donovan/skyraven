@@ -49,7 +49,9 @@ let issMarker = null;                      // {x, y, detail} for tap-to-identify
 let catalog = null;
 let markers = [];              // {x, y, detail} in CSS px, for tap-to-identify
 let placed = [];              // placed label rects [x1,y1,x2,y2] for collision avoidance
-const geom = { cx: 0, cy: 0, radius: 0 };
+const geom = { cx: 0, cy: 0, radius: 0 };       // LIVE projection center/radius (pan/zoom applied)
+const base = { cx: 0, cy: 0, radius: 0 };       // the zoom=1, unpanned fit from resize()
+const MIN_ZOOM = 1, MAX_ZOOM = 6;
 
 // --- persistence -----------------------------------------------------------
 function loadStore() {
@@ -634,9 +636,10 @@ function resize() {
   }
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   issCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  geom.cx = w / 2;
-  geom.cy = h / 2;
-  geom.radius = Math.min(w, h) / 2 - 14;
+  base.cx = w / 2;
+  base.cy = h / 2;
+  base.radius = Math.min(w, h) / 2 - 14;
+  geom.cx = base.cx; geom.cy = base.cy; geom.radius = base.radius; // reset pan/zoom
   draw();
 }
 
@@ -763,37 +766,135 @@ async function loadVersion() {
   }
 }
 
-// Tap-to-identify must not fire for the first finger of a pinch: a pinch gesture
-// also begins with a pointerdown, indistinguishable at that instant from a real tap.
-// So identification is deferred to pointerup, and cancelled if a second pointer joins
-// (pinch has started) or the pointer travels more than a few px (a drag, not a tap).
-const TAP_MOVE_TOLERANCE = 10; // css px
-let tapCandidate = null; // { id, x, y }
+// Gesture handling: 1 finger that stays still = tap-to-identify; 1 finger that
+// moves = pan; 2 fingers = pinch-zoom (about the pinch midpoint), which also cancels
+// any in-flight tap. Native browser pinch/pan is disabled on #sky (touch-action: none
+// in index.html) so this is the ONLY zoom in play — the HUD (bar/status/#identify)
+// lives outside the canvas and is never touched by it, unlike browser page-zoom.
+const TAP_MOVE_TOLERANCE = 10; // css px — beyond this a "tap" becomes a pan
+const DOUBLE_TAP_MS = 350;
+const DOUBLE_TAP_DIST = 24; // css px
 
-function clearTapCandidate() { tapCandidate = null; }
+const activePointers = new Map(); // pointerId -> {x, y}, canvas-local CSS px
+let gestureMode = null;    // null | "tap" | "pan" | "pinch"
+let tapStart = null;       // { id, x, y } for the sole pointer starting a potential tap
+let panLast = null;        // { x, y } last position, for 1-finger pan
+let pinchLast = null;      // { mid: {x,y}, dist } for 2-finger pinch
+let lastTap = null;        // { t, x, y } for double-tap-to-reset detection
+
+function canvasPoint(ev) {
+  const r = canvas.getBoundingClientRect();
+  return { x: ev.clientX - r.left, y: ev.clientY - r.top };
+}
+function midDist([a, b]) {
+  return { mid: { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }, dist: Math.hypot(a.x - b.x, a.y - b.y) };
+}
+function clampGeom() {
+  geom.radius = Math.min(base.radius * MAX_ZOOM, Math.max(base.radius * MIN_ZOOM, geom.radius));
+}
+let rafPending = false;
+function requestRedraw() {
+  if (rafPending) return;
+  rafPending = true;
+  requestAnimationFrame(() => { rafPending = false; draw(); });
+}
 
 canvas.addEventListener("pointerdown", (ev) => {
-  if (tapCandidate) { clearTapCandidate(); return; } // 2nd pointer down -> pinch, not a tap
-  const r = canvas.getBoundingClientRect();
-  const px = ev.clientX - r.left, py = ev.clientY - r.top;
-  const { cx, cy, radius } = geom;
-  if (Math.hypot(px - cx, py - cy) > radius) return; // outside the drawn sky circle
-  tapCandidate = { id: ev.pointerId, x: px, y: py };
+  const p = canvasPoint(ev);
+  activePointers.set(ev.pointerId, p);
+  canvas.setPointerCapture(ev.pointerId);
+
+  if (activePointers.size === 1) {
+    const { cx, cy, radius } = geom;
+    if (Math.hypot(p.x - cx, p.y - cy) > radius) { gestureMode = null; return; } // outside the sky circle
+    gestureMode = "tap";
+    tapStart = { id: ev.pointerId, x: p.x, y: p.y };
+    panLast = p;
+  } else if (activePointers.size === 2) {
+    gestureMode = "pinch";
+    pinchLast = midDist([...activePointers.values()]);
+  } else {
+    gestureMode = null; // 3+ fingers: ignore
+  }
 });
 
 canvas.addEventListener("pointermove", (ev) => {
-  if (!tapCandidate || ev.pointerId !== tapCandidate.id) return;
-  const r = canvas.getBoundingClientRect();
-  const px = ev.clientX - r.left, py = ev.clientY - r.top;
-  if (Math.hypot(px - tapCandidate.x, py - tapCandidate.y) > TAP_MOVE_TOLERANCE) clearTapCandidate();
+  if (!activePointers.has(ev.pointerId)) return;
+  const p = canvasPoint(ev);
+  activePointers.set(ev.pointerId, p);
+
+  if (gestureMode === "tap" && ev.pointerId === tapStart.id
+    && Math.hypot(p.x - tapStart.x, p.y - tapStart.y) > TAP_MOVE_TOLERANCE) {
+    gestureMode = "pan";
+  }
+  if (gestureMode === "pan") {
+    geom.cx += p.x - panLast.x;
+    geom.cy += p.y - panLast.y;
+    panLast = p;
+    requestRedraw();
+  } else if (gestureMode === "pinch" && activePointers.size === 2) {
+    const cur = midDist([...activePointers.values()]);
+    const scale = cur.dist / (pinchLast.dist || cur.dist);
+    const offX = pinchLast.mid.x - geom.cx, offY = pinchLast.mid.y - geom.cy;
+    geom.cx = cur.mid.x - offX * scale;
+    geom.cy = cur.mid.y - offY * scale;
+    geom.radius *= scale;
+    clampGeom();
+    pinchLast = cur;
+    requestRedraw();
+  }
 });
 
-canvas.addEventListener("pointerup", (ev) => {
-  if (tapCandidate && ev.pointerId === tapCandidate.id) identify(tapCandidate.x, tapCandidate.y);
-  clearTapCandidate();
+function endPointer(ev) {
+  const wasTap = gestureMode === "tap" && tapStart && tapStart.id === ev.pointerId;
+  activePointers.delete(ev.pointerId);
+
+  if (wasTap) {
+    const now = performance.now();
+    const isDoubleTap = lastTap && (now - lastTap.t) < DOUBLE_TAP_MS
+      && Math.hypot(tapStart.x - lastTap.x, tapStart.y - lastTap.y) < DOUBLE_TAP_DIST;
+    if (isDoubleTap) {
+      geom.cx = base.cx; geom.cy = base.cy; geom.radius = base.radius; // reset pan/zoom
+      lastTap = null;
+      requestRedraw();
+    } else {
+      identify(tapStart.x, tapStart.y);
+      lastTap = { t: now, x: tapStart.x, y: tapStart.y };
+    }
+  }
+
+  if (activePointers.size === 2) {
+    gestureMode = "pinch";
+    pinchLast = midDist([...activePointers.values()]);
+  } else if (activePointers.size === 1) {
+    gestureMode = "pan";
+    panLast = [...activePointers.values()][0];
+  } else {
+    gestureMode = null;
+    tapStart = null;
+  }
+}
+canvas.addEventListener("pointerup", endPointer);
+canvas.addEventListener("pointercancel", (ev) => {
+  activePointers.delete(ev.pointerId);
+  gestureMode = null;
+  tapStart = null;
+  pinchLast = null;
 });
 
-canvas.addEventListener("pointercancel", clearTapCandidate);
+// Desktop convenience: wheel = zoom about the cursor position.
+canvas.addEventListener("wheel", (ev) => {
+  ev.preventDefault();
+  const p = canvasPoint(ev);
+  const scale = ev.deltaY < 0 ? 1.1 : 1 / 1.1;
+  const offX = p.x - geom.cx, offY = p.y - geom.cy;
+  geom.cx = p.x - offX * scale;
+  geom.cy = p.y - offY * scale;
+  geom.radius *= scale;
+  clampGeom();
+  requestRedraw();
+}, { passive: false });
+
 window.addEventListener("resize", resize);
 
 (async function main() {

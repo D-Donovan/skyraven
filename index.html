@@ -30,7 +30,10 @@
     #stage { position: relative; flex: 1; min-height: 0; }
     #sky, #iss-layer { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
     #iss-layer { pointer-events: none; }   /* taps fall through to the sky */
-    #sky { touch-action: manipulation; }
+    /* JS drives pinch-zoom/pan itself (see app.js) by redrawing the sky at a
+       different projection scale — native browser pinch/pan is disabled here so
+       it can't fight that, and so the HUD (bar/status/#identify) never moves. */
+    #sky { touch-action: none; }
     #status { padding: 5px 10px; background: #0b0b16; border-top: 1px solid #1a1a2a;
               color: var(--accent); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     /* ISS next-pass readout, anchored on the left over the sky (taps pass through) */
