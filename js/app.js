@@ -414,14 +414,13 @@ function identify(px, py) {
     if (d < best) { best = d; nearestM = m; }
   }
   if (nearestM) flashHighlight(nearestM.x, nearestM.y);
-  const obj = nearestM ? `${nearestM.detail}   ·   ` : "";
   const coordLine = `Az ${aa.az.toFixed(1)}°  El ${aa.el.toFixed(1)}°   `
     + `RA ${rd.ra.toFixed(2)}h  Dec ${rd.dec.toFixed(1)}°`;
-  $("status").textContent = `${obj}${coordLine}`;
 
-  // Mirror the same info as a floating card over the sky (see #identify in index.html)
-  // so it's readable right where the user is looking, even pinch-zoomed away from
-  // the bottom #status bar.
+  // Shown as a floating card over the sky (see #identify in index.html), not the
+  // bottom #status bar — that bar is off in the corner of attention during pinch/pan,
+  // while this sits right where the user is looking. #status is left for the
+  // catalog-loading/error messages it also carries.
   const idEl = $("identify");
   idEl.innerHTML = nearestM ? `<b>${nearestM.detail}</b><br>${coordLine}` : coordLine;
   idEl.hidden = false;
